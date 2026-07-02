@@ -1,0 +1,36 @@
+# Secrets and credentials
+.env
+.env.*
+!.env.example
+client_secrets.json
+token.json
+credentials/
+*.pem
+*.key
+
+# Local state and data
+*.db
+*.sqlite
+*.sqlite3
+data/raw/
+*.log
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Node / deploy
+node_modules/
+.vercel/
+
+# Generated dashboard (contains real extracted data at render time)
+dashboard/index.html
+dashboard/*.tmp
+
+# OS
+.DS_Store

@@ -1,0 +1,28 @@
+# Core pipeline
+google-genai>=1.55.0
+python-dotenv>=1.0.0
+pydantic>=2.0
+
+# Google APIs (Gmail read, Gmail drafts, Sheets)
+google-api-python-client>=2.100.0
+google-auth-oauthlib>=1.0.0
+google-auth-httplib2>=0.2.0
+gspread>=6.0
+
+# Email body parsing
+html2text>=2024.2.26
+
+# Constraint solver and rebalance math
+PyPortfolioOpt>=1.5.5
+cvxpy>=1.4
+numpy>=2.0
+pandas>=2.0
+
+# Dashboard rendering
+jinja2>=3.1.0
+
+# Optional: SMS notifications
+twilio>=9.0
+
+# Dev
+pytest>=8.0.0

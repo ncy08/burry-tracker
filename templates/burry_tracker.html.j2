@@ -1,0 +1,1034 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Burry Portfolio Mirror</title>
+<meta name="description" content="Read-only portfolio mirror of Michael Burry's disclosed positions, rendered from the tracker's own signal log.">
+<script>
+/* Anti-FOUC: resolve theme before first paint. */
+(function () {
+  try {
+    var t = localStorage.getItem('burry-theme');
+    if (!t && window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches) t = 'dark';
+    if (t) document.documentElement.setAttribute('data-theme', t);
+  } catch (e) {}
+})();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<!-- Chart.js (UMD) for the allocation pie charts. Pinned + SRI-locked; loads
+     blocking in <head> so window.Chart is ready before the body init IIFE runs.
+     If the CDN is unreachable the charts degrade to an inline notice. -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" integrity="sha384-9nhczxUqK87bcKHh20fSQcTGD4qq5GhayNYSYWqwBkINBhOfQLg/P5HG5lF1urn4" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<style>
+  /* ============================================================
+     DESIGN-NY.md — Mode A (Data UI). Geist Sans + Geist Mono.
+     Off-White / Off-Black foundation, True Turquoise accent.
+     ============================================================ */
+  :root {
+    --off-black: #091717;
+    --off-white: #FBFAF4;
+    --true-turquoise: #20808D;
+    --turquoise-100: #DEF7F9;
+    --turquoise-200: #92DCE2;
+    --turquoise-300: #35BDC8;
+    --turquoise-400: #2CA0AB;
+    --turquoise-500: #20808D;
+    --turquoise-600: #1A6872;
+    --turquoise-700: #114F56;
+    --turquoise-800: #0B363C;
+    --turquoise-900: #081F22;
+    --orange:   #B2582D;
+    --yellow:   #9B6C22;
+    --olive:    #707C36;
+    --warm-red: #BF505C;
+
+    /* Light semantic aliases */
+    --bg:           var(--off-white);
+    --surface:      #F2EFE6;
+    --surface-2:    #FFFFFF;
+    --surface-tint: var(--turquoise-100);
+    --fg:           var(--off-black);
+    --fg-soft:      #3A4747;
+    --fg-faint:     #5F6B6B;  /* AA: 4.8:1 on surface, 5.3:1 on bg (was #6F7C7C, 3.77:1) */
+    --rule:         #D6D1C4;
+    --accent:       var(--true-turquoise);
+    --link:         var(--turquoise-700);
+    --success:      var(--olive);
+    --warning:      var(--yellow);
+    --error:        var(--warm-red);
+
+    --radius:    6px;
+    --radius-sm: 4px;
+    --maxw:      1280px;
+
+    --font-sans:  "Geist", system-ui, -apple-system, sans-serif;
+    --font-mono:  "Geist Mono", ui-monospace, "SF Mono", monospace;
+    --font-serif: ui-serif, Georgia, "Times New Roman", serif;
+  }
+
+  [data-theme="dark"] {
+    --bg:           var(--turquoise-900);
+    --surface:      var(--turquoise-800);
+    --surface-2:    #0E2A2F;
+    --surface-tint: #0E2D31;
+    --fg:           var(--off-white);
+    --fg-soft:      #B5B1A8;
+    --fg-faint:     #A39C8E;  /* AA: 4.8:1 on dark panel (was #7F7B71, 3.09:1) */
+    --rule:         #1F3A40;
+    --accent:       var(--turquoise-300);
+    --link:         var(--turquoise-300);
+    --success:      #A4B85B;
+    --warning:      #D49B47;
+    --error:        #D87883;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-sans);
+    font-size: 17px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  a { color: var(--link); text-underline-offset: 2px; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+
+  .skip-link { position: absolute; left: -9999px; top: 0; }
+  .skip-link:focus {
+    left: 16px; top: 16px; z-index: 100;
+    background: var(--surface); color: var(--fg);
+    padding: 10px 14px; border-radius: var(--radius); border: 1px solid var(--rule);
+  }
+
+  /* ---------- Topbar ---------- */
+  .topbar {
+    position: sticky; top: 0; z-index: 50;
+    background: color-mix(in srgb, var(--bg) 86%, transparent);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--rule);
+  }
+  .topbar__inner {
+    max-width: var(--maxw); margin: 0 auto;
+    padding: 14px 32px;
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; flex-wrap: wrap;
+  }
+  .brand { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .brand__row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .brand__title { margin: 0; font-size: 19px; font-weight: 600; letter-spacing: -0.01em; }
+  .brand__meta {
+    font-family: var(--font-mono); font-size: 12px; color: var(--fg-faint);
+    display: flex; gap: 16px; flex-wrap: wrap;
+  }
+  .brand__meta b { color: var(--fg-soft); font-weight: 500; }
+  .topbar__right { display: flex; align-items: center; gap: 10px; }
+
+  .sample-chip {
+    font-family: var(--font-mono); font-size: 11px; font-weight: 500;
+    text-transform: uppercase; letter-spacing: 0.08em;
+    padding: 4px 10px; border-radius: 100px;
+    background: #F6EAD2; color: #7A5418; border: 1px solid #E5C98F;
+  }
+  [data-theme="dark"] .sample-chip { background: rgba(212,155,71,0.16); color: #E0B973; border-color: rgba(212,155,71,0.4); }
+
+  .icon-btn {
+    width: 44px; height: 44px; flex: 0 0 auto;
+    border-radius: var(--radius); border: 1px solid var(--rule);
+    background: transparent; color: var(--fg); cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+    transition: background 150ms ease-out, border-color 150ms ease-out;
+  }
+  .icon-btn:hover { background: var(--surface-tint); border-color: var(--turquoise-300); }
+  .icon-btn svg { width: 19px; height: 19px; }
+  [data-theme="light"] .icon-btn .moon { display: block; }
+  [data-theme="light"] .icon-btn .sun  { display: none; }
+  [data-theme="dark"]  .icon-btn .moon { display: none; }
+  [data-theme="dark"]  .icon-btn .sun  { display: block; }
+
+  /* ---------- Layout ---------- */
+  main { max-width: var(--maxw); margin: 0 auto; padding: 24px 32px 80px; }
+
+  .kpis {
+    display: grid; grid-template-columns: repeat(6, 1fr); gap: 14px;
+  }
+  .kpi {
+    background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius);
+    padding: 15px 16px;
+  }
+  .kpi__label {
+    font-family: var(--font-mono); font-size: 11px; font-weight: 500;
+    text-transform: uppercase; letter-spacing: 0.07em; color: var(--turquoise-700);
+  }
+  [data-theme="dark"] .kpi__label { color: var(--turquoise-300); }
+  .kpi__value {
+    font-family: var(--font-mono); font-size: 29px; font-weight: 500;
+    font-variant-numeric: tabular-nums; letter-spacing: -0.01em;
+    margin-top: 6px; color: var(--fg); line-height: 1.05;
+  }
+  .kpi__sub { font-size: 12px; color: var(--fg-faint); margin-top: 3px; }
+
+  .panel {
+    background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius);
+    padding: 20px 22px; margin-top: 24px; min-width: 0;
+  }
+  .panel__head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 16px; margin-bottom: 14px; flex-wrap: wrap;
+  }
+  .panel__title { font-size: 20px; font-weight: 600; letter-spacing: -0.01em; }
+  .panel__meta { font-family: var(--font-mono); font-size: 12px; color: var(--fg-faint); }
+
+  .two-col { display: grid; grid-template-columns: 1.7fr 1fr; gap: 24px; margin-top: 24px; align-items: start; }
+  .two-col .panel { margin-top: 0; }
+
+  /* ---------- Allocation pies (two side-by-side cards, top of main) ---------- */
+  .alloc { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px; }
+  .alloc__card {
+    background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius);
+    padding: 18px 20px; min-width: 0;
+  }
+  .alloc__head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 12px; margin-bottom: 10px; flex-wrap: wrap;
+  }
+  .alloc__title { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
+  .alloc__meta { font-family: var(--font-mono); font-size: 12px; color: var(--fg-faint); }
+  /* Fixed-height box: Chart.js fills it (responsive + maintainAspectRatio:false). */
+  .alloc__canvas { position: relative; height: 300px; }
+  .alloc__note { display: flex; align-items: center; justify-content: center; height: 100%; }
+
+  /* ---------- Top-level view tabs ---------- */
+  .tabs {
+    display: flex; gap: 2px; margin-top: 28px;
+    border-bottom: 1px solid var(--rule);
+    overflow-x: auto; -webkit-overflow-scrolling: touch;
+  }
+  .tab {
+    appearance: none; background: transparent; border: none;
+    font-size: 15px; font-weight: 500; color: var(--fg-soft);
+    cursor: pointer; padding: 10px 18px; min-height: 44px;
+    border-bottom: 2px solid transparent; margin-bottom: -1px;
+    white-space: nowrap;
+    transition: color 150ms ease-out, border-color 150ms ease-out;
+  }
+  .tab:hover { color: var(--fg); }
+  /* Active-tab TEXT uses --link (turquoise-700, 8.4:1 on cream); --accent stays on the underline only. */
+  .tab[aria-selected="true"] { color: var(--link); border-bottom-color: var(--accent); }
+  .tabpanel[hidden] { display: none; }
+
+  /* ---------- Toolbar (portfolio controls) ---------- */
+  .toolbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+  .chip {
+    font-family: var(--font-mono); font-size: 12px; font-weight: 500;
+    text-transform: uppercase; letter-spacing: 0.04em;
+    min-height: 44px; padding: 0 14px; border-radius: 100px;
+    border: 1px solid var(--rule); background: transparent; color: var(--fg-soft);
+    cursor: pointer; transition: background 150ms ease-out, color 150ms ease-out, border-color 150ms ease-out;
+  }
+  .chip:hover { border-color: var(--turquoise-300); color: var(--fg); }
+  .chip[aria-pressed="true"] { background: var(--turquoise-700); color: var(--off-white); border-color: var(--turquoise-700); }
+  [data-theme="dark"] .chip[aria-pressed="true"] { background: var(--turquoise-600); border-color: var(--turquoise-600); }
+
+  .search { margin-left: auto; min-width: 180px; max-width: 280px; flex: 1; }
+  .search input {
+    width: 100%; min-height: 44px; padding: 0 14px;
+    border-radius: var(--radius); border: 1px solid var(--rule);
+    background: var(--bg); color: var(--fg);
+    font-family: var(--font-mono); font-size: 14px;
+  }
+  .search input::placeholder { color: var(--fg-faint); }
+
+  /* ---------- Table ---------- */
+  .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: var(--radius-sm); min-width: 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 760px; }
+  .rebal-table { min-width: 480px; }
+  thead th {
+    position: sticky; top: 0;
+    background: var(--surface-tint); color: var(--turquoise-700);
+    font-family: var(--font-mono); font-size: 11px; font-weight: 500;
+    text-transform: uppercase; letter-spacing: 0.06em;
+    text-align: left; padding: 13px 12px; white-space: nowrap;
+    cursor: pointer; user-select: none; border-bottom: 1px solid var(--rule);
+  }
+  [data-theme="dark"] thead th { background: var(--turquoise-800); color: var(--turquoise-300); }
+  thead th.num { text-align: right; }
+  thead th .caret { color: var(--accent); margin-left: 4px; }
+  tbody td { padding: 11px 12px; border-bottom: 1px solid var(--rule); vertical-align: middle; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr { cursor: pointer; transition: background 120ms ease-out; }
+  tbody tr:hover { background: var(--surface-tint); }
+  [data-theme="dark"] tbody tr:hover { background: rgba(53,189,200,0.08); }
+  tbody tr.selected { background: color-mix(in srgb, var(--turquoise-200) 45%, transparent); }
+  [data-theme="dark"] tbody tr.selected { background: rgba(53,189,200,0.16); }
+  td.num, th.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+  td.muted-cell { color: var(--fg-faint); }
+  .ticker { font-family: var(--font-mono); font-weight: 500; letter-spacing: 0.01em; }
+  .instr { font-family: var(--font-mono); font-size: 12px; color: var(--fg-faint); }
+
+  /* ---------- Badges (semantic pills, no colored left-borders) ---------- */
+  .badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-family: var(--font-mono); font-size: 11px; font-weight: 500;
+    letter-spacing: 0.03em; text-transform: uppercase;
+    padding: 3px 9px; border-radius: 100px; white-space: nowrap; line-height: 1.35;
+  }
+  .badge--info    { background: var(--turquoise-100); color: var(--turquoise-700); }
+  .badge--warning { background: #F6EAD2; color: #7A5418; }
+  .badge--success { background: #E8EBD4; color: #4F591F; }
+  .badge--muted   { background: var(--surface-2); color: var(--fg-faint); border: 1px solid var(--rule); }
+  .badge--buy       { background: #E8EBD4; color: #4F591F; }
+  .badge--sell      { background: #F6DEE1; color: #9A2F3B; }
+  .badge--open_new  { background: var(--turquoise-700); color: var(--off-white); }
+  .badge--close_out { background: #F3E0D2; color: #8A4220; }
+  .badge--type    { background: var(--surface-tint); color: var(--turquoise-700); }
+  [data-theme="dark"] .badge--info    { background: rgba(53,189,200,0.16); color: var(--turquoise-300); }
+  [data-theme="dark"] .badge--type    { background: rgba(53,189,200,0.12); color: var(--turquoise-300); }
+  [data-theme="dark"] .badge--warning { background: rgba(212,155,71,0.18); color: #E0B973; }
+  [data-theme="dark"] .badge--success,
+  [data-theme="dark"] .badge--buy     { background: rgba(164,184,91,0.18); color: #BFD17E; }
+  [data-theme="dark"] .badge--muted   { background: transparent; color: var(--fg-faint); border-color: var(--rule); }
+  [data-theme="dark"] .badge--sell    { background: rgba(216,120,131,0.18); color: #E59AA3; }
+  [data-theme="dark"] .badge--open_new{ background: var(--turquoise-600); color: var(--off-white); }
+  [data-theme="dark"] .badge--close_out{ background: rgba(178,88,45,0.24); color: #E0A07A; }
+
+  /* ---------- Sample banner ---------- */
+  .sample-banner {
+    display: flex; align-items: flex-start; gap: 10px;
+    background: #F6EAD2; color: #7A5418; border: 1px solid #E5C98F;
+    border-radius: var(--radius-sm); padding: 10px 13px; font-size: 13px; margin-bottom: 16px;
+  }
+  [data-theme="dark"] .sample-banner { background: rgba(212,155,71,0.12); color: #E0B973; border-color: rgba(212,155,71,0.4); }
+  .sample-banner svg { flex: 0 0 auto; width: 16px; height: 16px; margin-top: 2px; }
+
+  /* ---------- Rebalance ---------- */
+  .empty-state {
+    padding: 22px; text-align: left; color: var(--fg-faint); font-size: 14px;
+    background: var(--bg); border: 1px dashed var(--rule); border-radius: var(--radius-sm);
+  }
+
+  /* ---------- Caps ---------- */
+  .cap-row {
+    display: flex; justify-content: space-between; gap: 14px; align-items: baseline;
+    padding: 11px 0; border-bottom: 1px solid var(--rule);
+  }
+  .cap-row:last-child { border-bottom: none; }
+  .cap-row__group { font-size: 14px; color: var(--fg-soft); }
+  .cap-row__pct {
+    font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+    font-weight: 500; color: var(--fg); white-space: nowrap;
+  }
+
+  /* ---------- Timeline ---------- */
+  .tl-filter {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-family: var(--font-mono); font-size: 12px;
+    background: var(--turquoise-700); color: var(--off-white);
+    border: none; border-radius: 100px; padding: 7px 12px; cursor: pointer; min-height: 32px;
+  }
+  [data-theme="dark"] .tl-filter { background: var(--turquoise-600); }
+  .tl-filter .x { font-size: 14px; line-height: 1; }
+  .timeline { display: flex; flex-direction: column; }
+  .tl-item {
+    display: grid; grid-template-columns: 116px 1fr; gap: 18px;
+    padding: 15px 0; border-bottom: 1px solid var(--rule);
+  }
+  .tl-item:last-child { border-bottom: none; }
+  .tl-date { font-family: var(--font-mono); font-size: 12px; color: var(--fg-faint); padding-top: 3px; }
+  .tl-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+  .tl-ticker { font-family: var(--font-mono); font-weight: 500; font-size: 14px; }
+  .conf { display: inline-flex; align-items: center; gap: 5px; font-family: var(--font-mono); font-size: 11px; color: var(--fg-faint); text-transform: uppercase; letter-spacing: 0.04em; }
+  .conf .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--fg-faint); }
+  .conf.high .dot { background: var(--success); }
+  .conf.medium .dot { background: var(--warning); }
+  .conf.low .dot { background: var(--fg-faint); }
+  .tl-evidence {
+    font-family: var(--font-serif); font-style: italic; font-size: 15px; line-height: 1.5;
+    color: var(--fg-soft); cursor: pointer;
+    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .tl-evidence.expanded { -webkit-line-clamp: unset; }
+  .tl-more {
+    margin-top: 18px; width: 100%; min-height: 44px;
+    font-family: var(--font-mono); font-size: 13px;
+    background: transparent; color: var(--link);
+    border: 1px solid var(--rule); border-radius: var(--radius); cursor: pointer;
+    transition: background 150ms ease-out, border-color 150ms ease-out;
+  }
+  .tl-more:hover { background: var(--surface-tint); border-color: var(--turquoise-300); }
+
+  /* ---------- Footer ---------- */
+  .foot {
+    max-width: var(--maxw); margin: 0 auto; padding: 28px 32px 48px;
+    border-top: 1px solid var(--rule); color: var(--fg-faint); font-size: 13px;
+    display: flex; gap: 8px; flex-direction: column;
+  }
+  .foot code { font-family: var(--font-mono); color: var(--fg-soft); }
+
+  /* ---------- Responsive ---------- */
+  @media (max-width: 1023px) {
+    .kpis { grid-template-columns: repeat(3, 1fr); }
+  }
+  @media (max-width: 900px) {
+    .two-col { grid-template-columns: 1fr; }
+    .alloc { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 640px) {
+    .topbar__inner { padding: 12px 16px; }
+    main { padding: 20px 16px 56px; }
+    .foot { padding: 24px 16px 40px; }
+    .kpis { grid-template-columns: repeat(2, 1fr); gap: 12px; }
+    .kpi__value { font-size: 25px; }
+    .panel { padding: 16px 16px; }
+    .search { margin-left: 0; max-width: none; }
+    /* Tables collapse to labeled cards — zero horizontal scroll on mobile. */
+    .table-wrap { overflow-x: visible; }
+    .table-wrap table { min-width: 0; font-size: 14px; }
+    .table-wrap thead { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+    .table-wrap table, .table-wrap tbody, .table-wrap tr, .table-wrap td { display: block; width: 100%; }
+    .table-wrap tbody tr { border: 1px solid var(--rule); border-radius: var(--radius-sm); padding: 4px 12px; margin-bottom: 10px; }
+    .table-wrap tbody tr:hover { background: transparent; }
+    .table-wrap td { display: flex; align-items: center; justify-content: space-between; gap: 14px; text-align: right; border: none; padding: 9px 0; min-height: 0; }
+    .table-wrap td:not(:last-child) { border-bottom: 1px solid var(--rule); }
+    .table-wrap td.num { text-align: right; }
+    .table-wrap td::before {
+      content: attr(data-label); flex: 0 0 auto;
+      font-family: var(--font-mono); font-size: 11px; font-weight: 500;
+      text-transform: uppercase; letter-spacing: 0.05em; color: var(--turquoise-700); text-align: left;
+    }
+    .tl-item { grid-template-columns: 1fr; gap: 6px; }
+    .tl-date { padding-top: 0; }
+  }
+  [data-theme="dark"] .table-wrap td::before { color: var(--turquoise-300); }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    *, *::before, *::after { transition: none !important; animation: none !important; }
+  }
+</style>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="topbar__inner">
+    <div class="brand">
+      <div class="brand__row">
+        <h1 class="brand__title">Burry Portfolio Mirror</h1>
+        <span class="sample-chip" id="sampleChip" hidden>Sample portfolio</span>
+      </div>
+      <div class="brand__meta">
+        <span>Last post <b id="lastPost">—</b></span>
+        <span>Generated <b id="genAt">—</b></span>
+        <span>Source <b id="sourceLabel">—</b></span>
+      </div>
+    </div>
+    <div class="topbar__right">
+      <button class="icon-btn" id="themeToggle" type="button" aria-label="Toggle dark mode" title="Toggle theme">
+        <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2.5M12 19.5V22M4.22 4.22l1.77 1.77M18.01 18.01l1.77 1.77M2 12h2.5M19.5 12H22M4.22 19.78l1.77-1.77M18.01 5.99l1.77-1.77"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+  <section class="alloc" aria-label="Allocation comparison">
+    <div class="alloc__card">
+      <div class="alloc__head">
+        <h2 class="alloc__title">Burry portfolio allocation</h2>
+        <span class="alloc__meta" id="burryAllocMeta"></span>
+      </div>
+      <div class="alloc__canvas"><canvas id="burryPie" role="img" aria-label="Burry portfolio allocation by disclosed weight"></canvas></div>
+    </div>
+    <div class="alloc__card">
+      <div class="alloc__head">
+        <h2 class="alloc__title">Your portfolio allocation</h2>
+        <span class="sample-chip" id="userAllocChip" hidden>Sample</span>
+      </div>
+      <div class="alloc__canvas"><canvas id="userPie" role="img" aria-label="Your portfolio allocation by value"></canvas></div>
+    </div>
+  </section>
+
+  <section class="kpis" id="kpiRow" aria-label="Portfolio summary"></section>
+
+  <div class="tabs" role="tablist" aria-label="Dashboard views">
+    <button class="tab" role="tab" id="tab-portfolio" type="button" aria-controls="view-portfolio" aria-selected="true" tabindex="0">Portfolio</button>
+    <button class="tab" role="tab" id="tab-rebalance" type="button" aria-controls="view-rebalance" aria-selected="false" tabindex="-1">Rebalance</button>
+    <button class="tab" role="tab" id="tab-timeline" type="button" aria-controls="view-timeline" aria-selected="false" tabindex="-1">Timeline</button>
+  </div>
+
+  <div class="tabpanel" role="tabpanel" id="view-portfolio" aria-labelledby="tab-portfolio">
+  <section class="panel" id="portfolioPanel" aria-labelledby="portfolioTitle">
+    <div class="panel__head">
+      <h2 class="panel__title" id="portfolioTitle">Burry portfolio</h2>
+      <span class="panel__meta" id="portfolioCount"></span>
+    </div>
+    <div class="toolbar">
+      <div class="chips" role="group" aria-label="Filter positions">
+        <button class="chip" data-filter="all" type="button" aria-pressed="true">All</button>
+        <button class="chip" data-filter="open" type="button" aria-pressed="false">Open</button>
+        <button class="chip" data-filter="closed" type="button" aria-pressed="false">Closed</button>
+        <button class="chip" data-filter="stale" type="button" aria-pressed="false">Stale</button>
+      </div>
+      <div class="search">
+        <input id="tickerSearch" type="search" inputmode="search" placeholder="Search ticker…" aria-label="Search by ticker">
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table id="portfolioTable">
+        <thead><tr id="portfolioHead"></tr></thead>
+        <tbody id="portfolioBody"></tbody>
+      </table>
+    </div>
+  </section>
+  </div>
+
+  <div class="tabpanel" role="tabpanel" id="view-rebalance" aria-labelledby="tab-rebalance" hidden>
+  <div class="two-col">
+    <section class="panel" id="rebalancePanel" aria-labelledby="rebalanceTitle">
+      <div class="panel__head">
+        <h2 class="panel__title" id="rebalanceTitle">Rebalance vs. your portfolio</h2>
+        <span class="panel__meta" id="rebalanceCount"></span>
+      </div>
+      <div id="sampleBanner"></div>
+      <div id="rebalanceBody"></div>
+    </section>
+
+    <section class="panel" id="capsPanel" aria-labelledby="capsTitle">
+      <div class="panel__head">
+        <h2 class="panel__title" id="capsTitle">Aggregate caps</h2>
+        <span class="panel__meta" id="capsCount"></span>
+      </div>
+      <div id="capsBody"></div>
+    </section>
+  </div>
+  </div>
+
+  <div class="tabpanel" role="tabpanel" id="view-timeline" aria-labelledby="tab-timeline" hidden>
+  <section class="panel" id="timelinePanel" aria-labelledby="timelineTitle">
+    <div class="panel__head">
+      <h2 class="panel__title" id="timelineTitle">Signal timeline</h2>
+      <span class="panel__meta" id="timelineMeta"></span>
+    </div>
+    <div id="timelineFilter" style="margin-bottom:14px;"></div>
+    <div class="timeline" id="timelineBody"></div>
+    <div id="timelineMore"></div>
+  </section>
+  </div>
+</main>
+
+<footer class="foot">
+  <div>Read-only portfolio mirror rendered from <code id="footSource">signal_log.db</code>. Snapshot is at most one pipeline cycle stale.</div>
+  <div>Derived from Michael Burry's public Substack disclosures. Not investment advice.</div>
+</footer>
+
+<script>
+window.BURRY_DATA = {{ data | tojson | safe }};
+
+(function () {
+  "use strict";
+  var D = window.BURRY_DATA || {};
+  D.positions = D.positions || [];
+  D.caps      = D.caps || [];
+  D.signals   = D.signals || [];
+  D.rebalance = D.rebalance || [];
+  D.stats     = D.stats || {};
+
+  var $  = function (s, r) { return (r || document).querySelector(s); };
+  function el(tag, cls, txt) { var e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; }
+
+  /* ---------------- formatting ---------------- */
+  function fmtPct(v)  { return (v == null) ? "—" : (Number(v).toFixed(1) + "%"); }
+  function fmtDate(s) { return s ? String(s).slice(0, 10) : "—"; }
+  function fmtDateTime(s) {
+    if (!s) return "—";
+    var d = String(s).slice(0, 10), t = String(s).slice(11, 16);
+    return t ? (d + " " + t) : d;
+  }
+  function fmtUSD(v) {
+    if (v == null) return "—";
+    var sign = v < 0 ? "-" : "";
+    return sign + "$" + Math.abs(v).toLocaleString("en-US", { maximumFractionDigits: 0 });
+  }
+  function fmtUSDsigned(v) {
+    if (v == null) return "—";
+    var sign = v > 0 ? "+" : (v < 0 ? "-" : "");
+    return sign + "$" + Math.abs(v).toLocaleString("en-US", { maximumFractionDigits: 0 });
+  }
+  function fmtQty(v) { return (v == null) ? "—" : Number(v).toLocaleString("en-US"); }
+  function titleCase(s) { s = String(s || ""); return s.charAt(0).toUpperCase() + s.slice(1); }
+
+  function badge(text, variant) {
+    var b = el("span", "badge badge--" + variant);
+    b.textContent = text;
+    return b;
+  }
+
+  /* ---------------- state ---------------- */
+  var state = { sortKey: null, sortDir: "desc", filter: "all", search: "", ticker: null, tlLimit: 60 };
+
+  var COLS = [
+    { key: "ticker",            label: "Ticker",         type: "str",  cls: "" },
+    { key: "instrument_type",   label: "Instr",          type: "str",  cls: "col-instrument" },
+    { key: "weight_pct",        label: "Weight",         type: "num",  cls: "num" },
+    { key: "target_pct",        label: "Target",         type: "num",  cls: "num col-target" },
+    { key: "net_quantity",      label: "Net Qty",        type: "num",  cls: "num col-qty" },
+    { key: "conviction",        label: "Conviction",     type: "str",  cls: "" },
+    { key: "status",            label: "Status",         type: "str",  cls: "" },
+    { key: "last_confirmed_at", label: "Last Confirmed", type: "date", cls: "col-last" }
+  ];
+
+  /* ---------------- topbar ---------------- */
+  function renderTopbar() {
+    $("#genAt").textContent     = fmtDateTime(D.generated_at);
+    $("#lastPost").textContent  = D.stats.last_post_date || "—";
+    $("#sourceLabel").textContent = D.source || "—";
+    $("#footSource").textContent  = D.source || "signal_log.db";
+    if (D.rebalance_is_sample) $("#sampleChip").hidden = false;
+  }
+
+  /* ---------------- KPIs ---------------- */
+  function renderKpis() {
+    var s = D.stats;
+    var tiles = [
+      { label: "Open",          value: s.open_count != null ? s.open_count : 0,   sub: "positions" },
+      { label: "Stale",         value: s.stale_count != null ? s.stale_count : 0, sub: ">90d unconfirmed" },
+      { label: "Closed",        value: s.closed_count != null ? s.closed_count : 0, sub: "exited" },
+      { label: "Modeled Weight", value: s.modeled_weight_pct != null ? Number(s.modeled_weight_pct).toFixed(1) + "%" : "—", sub: "of book" },
+      { label: "Aggregate Caps", value: s.cap_count != null ? s.cap_count : 0, sub: "groupings" },
+      { label: "Signals",        value: s.signal_count != null ? s.signal_count : 0, sub: "events logged" }
+    ];
+    var row = $("#kpiRow"); row.textContent = "";
+    tiles.forEach(function (t) {
+      var c = el("div", "kpi");
+      c.appendChild(el("div", "kpi__label", t.label));
+      c.appendChild(el("div", "kpi__value", String(t.value)));
+      c.appendChild(el("div", "kpi__sub", t.sub));
+      row.appendChild(c);
+    });
+  }
+
+  /* ---------------- portfolio table ---------------- */
+  function filteredPositions() {
+    var rows = D.positions.slice();
+    if (state.filter === "open")        rows = rows.filter(function (p) { return p.status === "open"; });
+    else if (state.filter === "closed") rows = rows.filter(function (p) { return p.status === "closed"; });
+    else if (state.filter === "stale")  rows = rows.filter(function (p) { return p.conviction === "stale"; });
+    if (state.search) {
+      var q = state.search.toLowerCase();
+      rows = rows.filter(function (p) { return String(p.ticker || "").toLowerCase().indexOf(q) !== -1; });
+    }
+    if (state.sortKey) {
+      var col = COLS.filter(function (c) { return c.key === state.sortKey; })[0];
+      var dir = state.sortDir === "asc" ? 1 : -1;
+      rows.sort(function (a, b) {
+        var av = a[state.sortKey], bv = b[state.sortKey];
+        if (col.type === "num") {
+          var an = (av == null), bn = (bv == null);
+          if (an && bn) return 0; if (an) return 1; if (bn) return -1; /* null always last */
+          return (av - bv) * dir;
+        }
+        if (col.type === "date") {
+          av = av || ""; bv = bv || "";
+          return av < bv ? -dir : (av > bv ? dir : 0);
+        }
+        av = (av == null ? "" : String(av)).toLowerCase();
+        bv = (bv == null ? "" : String(bv)).toLowerCase();
+        return av < bv ? -dir : (av > bv ? dir : 0);
+      });
+    }
+    return rows;
+  }
+
+  function renderHead() {
+    var head = $("#portfolioHead"); head.textContent = "";
+    COLS.forEach(function (col) {
+      var th = el("th", col.cls);
+      th.textContent = col.label;
+      th.setAttribute("tabindex", "0");
+      th.setAttribute("role", "columnheader");
+      th.setAttribute("aria-sort", state.sortKey === col.key ? (state.sortDir === "asc" ? "ascending" : "descending") : "none");
+      if (state.sortKey === col.key) {
+        var caret = el("span", "caret", state.sortDir === "asc" ? "▲" : "▼");
+        th.appendChild(caret);
+      }
+      function doSort() {
+        if (state.sortKey === col.key) { state.sortDir = (state.sortDir === "asc" ? "desc" : "asc"); }
+        else { state.sortKey = col.key; state.sortDir = (col.type === "str" ? "asc" : "desc"); }
+        renderHead(); renderBody();
+      }
+      th.addEventListener("click", doSort);
+      th.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); doSort(); } });
+      head.appendChild(th);
+    });
+  }
+
+  function renderBody() {
+    var rows = filteredPositions();
+    var body = $("#portfolioBody"); body.textContent = "";
+    $("#portfolioCount").textContent = rows.length + " of " + D.positions.length + " positions";
+
+    if (!rows.length) {
+      var tr = el("tr");
+      var td = el("td"); td.colSpan = COLS.length;
+      td.appendChild(el("div", "empty-state", "No positions match this filter."));
+      tr.appendChild(td); body.appendChild(tr);
+      return;
+    }
+
+    rows.forEach(function (p) {
+      var tr = el("tr");
+      if (state.ticker && p.ticker === state.ticker) tr.className = "selected";
+      tr.setAttribute("tabindex", "0");
+      tr.setAttribute("role", "button");
+      tr.setAttribute("aria-label", "Filter timeline to " + p.ticker);
+
+      COLS.forEach(function (col) {
+        var td = el("td", col.cls);
+        td.setAttribute("data-label", col.label);
+        var v = p[col.key];
+        if (col.key === "ticker") { td.appendChild(el("span", "ticker", p.ticker)); }
+        else if (col.key === "instrument_type") { td.appendChild(el("span", "instr", v || "—")); }
+        else if (col.key === "weight_pct" || col.key === "target_pct") { td.classList.add("num"); td.textContent = fmtPct(v); }
+        else if (col.key === "net_quantity") { td.classList.add("num"); td.textContent = fmtQty(v); }
+        else if (col.key === "conviction") { td.appendChild(badge(v, v === "confirmed" ? "info" : "warning")); }
+        else if (col.key === "status") { td.appendChild(badge(v, v === "open" ? "success" : "muted")); }
+        else if (col.key === "last_confirmed_at") { td.classList.add("num"); td.textContent = fmtDate(v); }
+        else { td.textContent = (v == null ? "—" : String(v)); }
+        tr.appendChild(td);
+      });
+
+      function drill() { setTicker(state.ticker === p.ticker ? null : p.ticker); }
+      tr.addEventListener("click", drill);
+      tr.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); drill(); } });
+      body.appendChild(tr);
+    });
+  }
+
+  /* ---------------- rebalance ---------------- */
+  var REBAL_LABEL = { buy: "Buy", sell: "Sell", open_new: "Open", close_out: "Close" };
+  function renderRebalance() {
+    var banner = $("#sampleBanner"); banner.textContent = "";
+    if (D.rebalance_is_sample) {
+      var b = el("div", "sample-banner");
+      b.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v4h1"/></svg>';
+      b.appendChild(el("span", null, "Showing a sample portfolio. Drop a CSV at the configured path to mirror your own holdings."));
+      banner.appendChild(b);
+    }
+
+    var host = $("#rebalanceBody"); host.textContent = "";
+    $("#rebalanceCount").textContent = D.rebalance.length + (D.rebalance.length === 1 ? " action" : " actions");
+
+    if (!D.rebalance.length) {
+      host.appendChild(el("div", "empty-state", "No rebalance actions — your portfolio already tracks the mirrored book within the rebalance threshold."));
+      return;
+    }
+
+    var wrap = el("div", "table-wrap");
+    var table = el("table", "rebal-table");
+    var REBAL_COLS = ["Ticker", "Action", "Delta", "Target", "Current", "Notes"];
+    var thead = el("thead"), htr = el("tr");
+    REBAL_COLS.forEach(function (h, i) {
+      var th = el("th", (i >= 2 && i <= 4) ? "num" : "");
+      th.style.cursor = "default"; th.removeAttribute && th.removeAttribute("tabindex");
+      th.textContent = h; htr.appendChild(th);
+    });
+    thead.appendChild(htr); table.appendChild(thead);
+    var tb = el("tbody");
+    function rcell(cls, label) { var td = el("td", cls); td.setAttribute("data-label", label); return td; }
+    D.rebalance.forEach(function (r) {
+      var tr = el("tr"); tr.style.cursor = "default";
+      var tdT = rcell("", "Ticker"); tdT.appendChild(el("span", "ticker", r.ticker)); tr.appendChild(tdT);
+      var tdA = rcell("", "Action"); tdA.appendChild(badge(REBAL_LABEL[r.direction] || r.direction, r.direction)); tr.appendChild(tdA);
+      var tdD = rcell("num", "Delta"); tdD.textContent = fmtUSDsigned(r.delta_usd); tr.appendChild(tdD);
+      var tdTgt = rcell("num", "Target"); tdTgt.textContent = fmtPct(r.target_pct); tr.appendChild(tdTgt);
+      var tdC = rcell("num", "Current"); tdC.textContent = fmtUSD(r.current_value_usd); tr.appendChild(tdC);
+      var tdN = rcell("muted-cell", "Notes"); tdN.textContent = r.notes || "—"; tr.appendChild(tdN);
+      tb.appendChild(tr);
+    });
+    table.appendChild(tb); wrap.appendChild(table); host.appendChild(wrap);
+  }
+
+  /* ---------------- caps ---------------- */
+  function renderCaps() {
+    var host = $("#capsBody"); host.textContent = "";
+    $("#capsCount").textContent = D.caps.length + (D.caps.length === 1 ? " cap" : " caps");
+    if (!D.caps.length) { host.appendChild(el("div", "empty-state", "No aggregate caps disclosed.")); return; }
+    D.caps.forEach(function (c) {
+      var row = el("div", "cap-row");
+      row.appendChild(el("div", "cap-row__group", c.grouping));
+      row.appendChild(el("div", "cap-row__pct", fmtPct(c.cap_pct)));
+      host.appendChild(row);
+    });
+  }
+
+  /* ---------------- timeline ---------------- */
+  function timelineSignals() {
+    var rows = D.signals.slice();
+    if (state.ticker) {
+      var t = state.ticker.toUpperCase();
+      rows = rows.filter(function (s) { return String(s.ticker || "").toUpperCase() === t; });
+    }
+    rows.sort(function (a, b) { return String(b.valid_time || "").localeCompare(String(a.valid_time || "")); });
+    return rows;
+  }
+
+  function renderTimeline() {
+    var rows = timelineSignals();
+    var host = $("#timelineBody"); host.textContent = "";
+    var moreHost = $("#timelineMore"); moreHost.textContent = "";
+    var filterHost = $("#timelineFilter"); filterHost.textContent = "";
+
+    if (state.ticker) {
+      var btn = el("button", "tl-filter");
+      btn.type = "button";
+      btn.appendChild(el("span", null, "Filtered to " + state.ticker));
+      btn.appendChild(el("span", "x", "✕"));
+      btn.setAttribute("aria-label", "Clear timeline filter");
+      btn.addEventListener("click", function () { setTicker(null); });
+      filterHost.appendChild(btn);
+    }
+
+    $("#timelineMeta").textContent = rows.length + (rows.length === 1 ? " signal" : " signals");
+
+    if (!rows.length) {
+      host.appendChild(el("div", "empty-state", state.ticker ? ("No signals for " + state.ticker + ".") : "No signals logged yet."));
+      return;
+    }
+
+    var showAll = state.ticker || state.tlLimit >= rows.length;
+    var shown = showAll ? rows : rows.slice(0, state.tlLimit);
+
+    shown.forEach(function (s) {
+      var item = el("div", "tl-item");
+      var date = el("div", "tl-date", fmtDate(s.valid_time));
+      item.appendChild(date);
+
+      var mainCol = el("div");
+      var head = el("div", "tl-head");
+      head.appendChild(badge(s.signal_type, "type"));
+      if (s.ticker) head.appendChild(el("span", "tl-ticker", s.ticker));
+      if (s.signal_type === "EXECUTION" && s.direction) {
+        head.appendChild(badge(s.direction, s.direction === "sell" ? "sell" : "buy"));
+      }
+      if (s.confidence) {
+        var conf = el("span", "conf " + s.confidence);
+        conf.appendChild(el("span", "dot"));
+        conf.appendChild(el("span", null, s.confidence));
+        head.appendChild(conf);
+      }
+      mainCol.appendChild(head);
+
+      if (s.evidence_text) {
+        var ev = el("div", "tl-evidence", "“" + s.evidence_text + "”");
+        ev.title = "Click to expand";
+        ev.addEventListener("click", function () { ev.classList.toggle("expanded"); });
+        mainCol.appendChild(ev);
+      }
+      item.appendChild(mainCol);
+      host.appendChild(item);
+    });
+
+    if (!showAll) {
+      var more = el("button", "tl-more", "Show all " + rows.length + " signals");
+      more.type = "button";
+      more.addEventListener("click", function () { state.tlLimit = Infinity; renderTimeline(); });
+      moreHost.appendChild(more);
+    }
+  }
+
+  /* ---------------- drill-down ---------------- */
+  function setTicker(ticker) {
+    state.ticker = ticker;
+    renderBody();
+    renderTimeline();
+    if (ticker) {
+      activateTab("timeline");
+      var panel = $("#timelinePanel");
+      var behavior = (window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches) ? "auto" : "smooth";
+      panel.scrollIntoView({ behavior: behavior, block: "start" });
+    }
+  }
+
+  /* ---------------- tabs ---------------- */
+  var TAB_IDS = ["portfolio", "rebalance", "timeline"];
+  function activateTab(name) {
+    if (TAB_IDS.indexOf(name) === -1) name = "portfolio";
+    TAB_IDS.forEach(function (id) {
+      var tab = document.getElementById("tab-" + id);
+      var view = document.getElementById("view-" + id);
+      if (!tab || !view) return;
+      var on = (id === name);
+      tab.setAttribute("aria-selected", on ? "true" : "false");
+      tab.tabIndex = on ? 0 : -1;
+      if (on) view.removeAttribute("hidden"); else view.setAttribute("hidden", "");
+    });
+    try { localStorage.setItem("burry-tab", name); } catch (e) {}
+  }
+
+  function wireTabs() {
+    var tabs = TAB_IDS.map(function (id) { return document.getElementById("tab-" + id); });
+    tabs.forEach(function (tab, i) {
+      if (!tab) return;
+      tab.addEventListener("click", function () { activateTab(TAB_IDS[i]); });
+      tab.addEventListener("keydown", function (e) {
+        var idx = null;
+        if (e.key === "ArrowRight" || e.key === "ArrowDown") idx = (i + 1) % tabs.length;
+        else if (e.key === "ArrowLeft" || e.key === "ArrowUp") idx = (i - 1 + tabs.length) % tabs.length;
+        else if (e.key === "Home") idx = 0;
+        else if (e.key === "End") idx = tabs.length - 1;
+        if (idx !== null) { e.preventDefault(); activateTab(TAB_IDS[idx]); tabs[idx].focus(); }
+      });
+    });
+    var saved = null;
+    try { saved = localStorage.getItem("burry-tab"); } catch (e) {}
+    activateTab(saved || "portfolio");
+  }
+
+  /* ---------------- controls ---------------- */
+  function wireControls() {
+    var chips = document.querySelectorAll(".chip[data-filter]");
+    Array.prototype.forEach.call(chips, function (chip) {
+      chip.addEventListener("click", function () {
+        state.filter = chip.getAttribute("data-filter");
+        Array.prototype.forEach.call(chips, function (c) { c.setAttribute("aria-pressed", c === chip ? "true" : "false"); });
+        renderBody();
+      });
+    });
+
+    var search = $("#tickerSearch");
+    search.addEventListener("input", function () { state.search = search.value.trim(); renderBody(); });
+
+    var toggle = $("#themeToggle");
+    toggle.addEventListener("click", function () {
+      var cur = document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light";
+      var next = cur === "dark" ? "light" : "dark";
+      document.documentElement.setAttribute("data-theme", next);
+      try { localStorage.setItem("burry-theme", next); } catch (e) {}
+      restyleCharts();
+    });
+  }
+
+  /* ---------------- allocation pie charts ---------------- */
+  var burryChart = null, userChart = null;
+
+  function cssVar(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+  function themeText() { return cssVar("--fg") || "#091717"; }
+  function reducedMotion() {
+    return !!(window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches);
+  }
+  // Categorical hues pulled from the design tokens. They live in :root and are
+  // NOT overridden by the dark theme, so slice colors stay stable across theme
+  // toggles — only the legend text follows --fg (see restyleCharts).
+  var SLICE_TOKENS = ["--true-turquoise", "--orange", "--olive", "--yellow", "--warm-red", "--turquoise-300", "--turquoise-700", "--turquoise-200"];
+  function sliceColor(i) { return cssVar(SLICE_TOKENS[i % SLICE_TOKENS.length]) || "#20808D"; }
+  var UNDISCLOSED_COLOR = "#9AA6A6";  // theme-neutral grey for Burry's undisclosed weight
+
+  function pieNote(canvasId, msg) {
+    var canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+    var wrap = canvas.parentNode; wrap.textContent = "";
+    var note = el("div", "alloc__note");
+    note.appendChild(el("div", "empty-state", msg));
+    wrap.appendChild(note);
+  }
+
+  function makePie(canvasId, labels, values, colors, tooltipLabel) {
+    var canvas = document.getElementById(canvasId);
+    if (!canvas) return null;
+    return new Chart(canvas.getContext("2d"), {
+      type: "pie",
+      data: { labels: labels, datasets: [{ data: values, backgroundColor: colors, borderColor: cssVar("--surface"), borderWidth: 2 }] },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: { duration: reducedMotion() ? 0 : 600 },
+        plugins: {
+          legend: { position: "bottom", labels: { color: themeText(), boxWidth: 12, boxHeight: 12, padding: 12, font: { size: 12 } } },
+          tooltip: { callbacks: { label: tooltipLabel } }
+        }
+      }
+    });
+  }
+
+  function buildBurryPie() {
+    var a = D.burry_allocation || {};
+    var slices = a.slices || [];
+    var meta = $("#burryAllocMeta");
+    if (meta) {
+      var parts = [];
+      if (a.disclosed_total_pct != null) parts.push(Number(a.disclosed_total_pct).toFixed(1) + "% disclosed");
+      if (a.undisclosed_count) parts.push(a.undisclosed_count + " undisclosed");
+      meta.textContent = parts.join(" · ");
+    }
+    if (!slices.length && !(a.undisclosed_pct > 0)) { pieNote("burryPie", "No disclosed weights yet."); return null; }
+    var labels = slices.map(function (s) { return s.ticker; });
+    var values = slices.map(function (s) { return s.weight_pct; });
+    var colors = slices.map(function (_, i) { return sliceColor(i); });
+    if (a.undisclosed_pct > 0) { labels.push("Undisclosed"); values.push(a.undisclosed_pct); colors.push(UNDISCLOSED_COLOR); }
+    return makePie("burryPie", labels, values, colors, function (ctx) {
+      return ctx.label + ": " + Number(ctx.parsed).toFixed(1) + "%";
+    });
+  }
+
+  function buildUserPie() {
+    var a = D.user_allocation || {};
+    var slices = a.slices || [];
+    var chip = $("#userAllocChip");
+    if (chip && a.is_sample) chip.hidden = false;
+    if (!slices.length) { pieNote("userPie", "No holdings to chart."); return null; }
+    var labels = slices.map(function (s) { return s.ticker; });
+    var values = slices.map(function (s) { return s.value_pct; });
+    var colors = slices.map(function (_, i) { return sliceColor(i); });
+    return makePie("userPie", labels, values, colors, function (ctx) {
+      var s = slices[ctx.dataIndex] || {};
+      return ctx.label + ": " + Number(ctx.parsed).toFixed(1) + "% (" + fmtUSD(s.value_usd) + ")";
+    });
+  }
+
+  function renderAllocationCharts() {
+    if (typeof Chart === "undefined") {
+      pieNote("burryPie", "Charts need a connection to the Chart.js CDN.");
+      pieNote("userPie", "Charts need a connection to the Chart.js CDN.");
+      return;
+    }
+    Chart.defaults.font.family = "Geist, system-ui, -apple-system, sans-serif";
+    burryChart = buildBurryPie();
+    userChart = buildUserPie();
+  }
+
+  function restyleCharts() {
+    [burryChart, userChart].forEach(function (ch) {
+      if (!ch) return;
+      ch.options.plugins.legend.labels.color = themeText();
+      ch.data.datasets[0].borderColor = cssVar("--surface");
+      ch.update("none");
+    });
+  }
+
+  /* ---------------- init ---------------- */
+  renderTopbar();
+  renderKpis();
+  renderAllocationCharts();
+  renderHead();
+  renderBody();
+  renderRebalance();
+  renderCaps();
+  renderTimeline();
+  wireControls();
+  wireTabs();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+ticker,instrument_type,quantity,current_value_usd
+MOH,stock,40,12000.00
+LULU,stock,30,9500.00
+NVDA,stock,50,8500.00
+SLM,stock,200,5600.00
+QQQ,put,2,1400.00
+AAPL,stock,25,5200.00
