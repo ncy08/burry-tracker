@@ -10,8 +10,9 @@ Bitemporal fields (`valid_time`, `transaction_time`) and `source_post_url`
 are filled by this module after the LLM call. The LLM cannot reliably
 know ingest time, and the post URL is metadata.
 
-Hard cap: twenty candidate signals per post. The Stage 1 prompt states
-the cap; the parser also enforces it in code.
+Hard cap: MAX_SIGNALS_PER_POST candidate signals per post. The Stage 1
+prompt states the cap (substituted from the constant so the two cannot
+drift); the parser also enforces it in code and warns when it clips.
 
 """
 
@@ -30,7 +31,10 @@ from substack_trader.signals import SIGNAL_CLASSES, Signal, SignalAdapter
 
 logger = logging.getLogger(__name__)
 
-MAX_SIGNALS_PER_POST = 20
+# Dense posts (a full long-book ranking plus a round of short covers) can
+# exceed 20 candidates; the tail was silently dropped. 40 leaves headroom
+# and the parser warns when it clips.
+MAX_SIGNALS_PER_POST = 40
 
 SIGNAL_TYPES = [
     "EXECUTION",
@@ -168,13 +172,14 @@ HK numeric tickers ("3690", "6862") are HK; "TPW AU" is ASX.
 fill_price=468 and currency=HKD; "AUD ~5.40" sets fill_price=5.40 and \
 currency=AUD. Default currency=USD when unstated.
 
-HARD CAP: At most twenty candidates per post. If you find more, keep \
-the highest-confidence twenty.
+HARD CAP: At most __MAX_SIGNALS__ candidates per post. If you find more, \
+keep the highest-confidence __MAX_SIGNALS__. Never drop a candidate that \
+carries an explicit or inferred weight_hint in favor of one that does not.
 
 OUTPUT:
 Return the JSON object {"signals": [Candidate, ...]}. Empty array if \
 no candidates. Do NOT include any text outside the JSON.
-"""
+""".replace("__MAX_SIGNALS__", str(MAX_SIGNALS_PER_POST))
 
 
 EXTRACTION_SCHEMA: dict = {
@@ -264,7 +269,17 @@ def parse_candidates(
     still raises so genuine breakage fails loudly.
     """
     data = json.loads(raw_json)
-    raw_signals = data.get("signals", [])[:MAX_SIGNALS_PER_POST]
+    all_signals = data.get("signals", [])
+    if len(all_signals) > MAX_SIGNALS_PER_POST:
+        logger.warning(
+            "Stage 1 returned %d candidates for %s; keeping the first %d and "
+            "dropping %d. Raise MAX_SIGNALS_PER_POST if this recurs.",
+            len(all_signals),
+            source_post_url,
+            MAX_SIGNALS_PER_POST,
+            len(all_signals) - MAX_SIGNALS_PER_POST,
+        )
+    raw_signals = all_signals[:MAX_SIGNALS_PER_POST]
     out: list[tuple[Signal, dict]] = []
     for cand in raw_signals:
         signal_payload = {
